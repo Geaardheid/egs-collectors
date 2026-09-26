@@ -1,0 +1,20 @@
+name: Keepalive
+# GitHub zet geplande workflows in publieke repo's uit na 60 dagen zonder activiteit.
+# Eén kleine commit per week houdt de FiveM-collector aan.
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+permissions: { contents: write }
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          date -u +%Y-%m-%dT%H:%M:%SZ > heartbeat.txt
+          git config user.name "EGS_dev_Kevin"
+          git config user.email "EGS_dev_Kevin@users.noreply.github.com"
+          git add heartbeat.txt
+          git commit -m "keepalive" || exit 0
+          git push
