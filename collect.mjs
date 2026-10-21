@@ -63,12 +63,25 @@ while (i + 4 <= buf.length) {
     onesync: s.vars.onesync_enabled === "true" });
 }
 rows.sort((a, b) => b.clients - a.clients).forEach((r, k) => { r.rank = k + 1; });
-const total = { servers, active: rows.length, players };
+/* Okt 2026: de ingest draait onder de publieke rol met een limiet van 3 s per aanroep. Daarom chunks van 500,
+   één tijdstip (run_at) voor alle chunks, en alleen de laatste chunk (final) zet ontbrekende servers op 0 en
+   schrijft het totaal. Dagcijfers en opruimen doet de database zelf (pg_cron egs-fivem-maintain).
+   Een chunk die faalt (time-out, 5xx) wordt nog twee keer geprobeerd. */
+const CHUNK = 500;
+const total = { servers, active: rows.length, players, run_at: new Date().toISOString() };
 console.log(`servers ${servers}, active ${rows.length}, players ${players}`);
-for (let k = 0; k < rows.length; k += 1000) {
-  const r = await fetch(SB_URL + "/rest/v1/rpc/egs_fivem_ingest", { method: "POST", headers: { apikey: SB_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({ p_token: TOKEN, p_rows: rows.slice(k, k + 1000), p_total: total }) });
-  const t = await r.text();
-  if (!r.ok) { console.error("ingest", r.status, t.slice(0, 300)); process.exit(1); }
-  console.log("chunk", k, t);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+for (let k = 0; k < rows.length; k += CHUNK) {
+  const final = k + CHUNK >= rows.length;
+  const body = JSON.stringify({ p_token: TOKEN, p_rows: rows.slice(k, k + CHUNK), p_total: { ...total, final } });
+  let ok = false, last = "";
+  for (let attempt = 1; attempt <= 3 && !ok; attempt++) {
+    const r = await fetch(SB_URL + "/rest/v1/rpc/egs_fivem_ingest", { method: "POST", headers: { apikey: SB_KEY, "Content-Type": "application/json" }, body });
+    last = `${r.status} ${(await r.text()).slice(0, 300)}`;
+    if (r.ok) ok = true;
+    else if (r.status === 403 || r.status === 400) break;   /* verkeerde token of data: opnieuw proberen helpt niet */
+    else await sleep(4000 * attempt);
+  }
+  if (!ok) { console.error("ingest chunk", k, last); process.exit(1); }
+  console.log("chunk", k, final ? "(final)" : "", last);
 }
